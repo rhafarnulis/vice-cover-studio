@@ -47,7 +47,7 @@ The Anton display face is licensed under the SIL Open Font License
 - `app/src/editor.js` — the editor: photos, panels, drag-to-crop, export.
 - `app/src/shots.js` — deterministic screenshot mode (`?shot=cover` or
   `?shot=editor` with `photo`, `caption`, `layout`, `grade`, `size`).
-- `app/src/main.js` — bootstrap.
+- `app/src/main2.js` — bootstrap.
 - `main.ts` — the entry program: copies `app/` and `screenshots/` to
   `/output` and writes `/output/dossier.json`.
 
