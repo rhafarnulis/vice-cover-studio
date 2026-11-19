@@ -1,45 +1,35 @@
 // Vice Cover Studio — screenshot mode.
 //
-// The parent process captures the entry's screenshots by opening the app
-// with a query string, so the shots are deterministic and need no clicking:
-//
-//   ?shot=cover&photo=boulevard&caption=Sunset%20Heist&layout=grid&grade=sunset&size=square
-//       Full-window render of one exported cover.
-//   ?shot=editor&photo=car&caption=Boulevard%20Queen&layout=trio&grade=neon
-//       The editor itself, with a sample photo loaded and the caption set.
-//
-// photo names the bundled samples (boulevard, car, pier). Nothing here is
-// part of the app's normal flow: without ?shot= the editor opens empty.
+// With ?shot= in the address the page renders one deterministic shot instead
+// of the empty editor: a finished cover full-window (?shot=cover), or the
+// editor with a sample photo loaded (?shot=editor). The captures for the
+// entry are taken this way, with no clicking, so they always show the same
+// thing.
 
 import { EXPORT_SIZES, GRADES, LAYOUTS, panelsForLayout, renderCover } from './cover.js';
 import { SAMPLES } from './editor.js';
 
-/** Load one bundled sample photo by its short name. */
+/** Load one of the bundled samples by the name in the query string. */
 function loadSamplePhoto(name) {
-  const sample = SAMPLES.find((s) => s.src.includes(name)) || SAMPLES[0];
+  const sample = SAMPLES.find((item) => item.src.includes(name));
+  if (!sample) throw new Error(`no sample photo named ${name}`);
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => {
-      img.dataset.name = sample.name;
-      resolve(img);
-    };
+    img.onload = () => resolve(img);
     img.onerror = () => reject(new Error(`could not load ${sample.src}`));
     img.src = sample.src;
   });
 }
 
-/**
- * Handle a ?shot= URL. editorApi is the object buildEditor returned.
- * Returns true when a shot was handled.
- */
+/** Apply ?shot=... to a live editor. Returns true when a shot was rendered. */
 export async function handleShot(editorApi) {
   const params = new URLSearchParams(window.location.search);
   const shot = params.get('shot');
   if (!shot) return false;
 
-  const { state, redraw, loadSamples } = editorApi;
+  const { state, redraw, rebuildTray } = editorApi;
   const caption = params.get('caption');
-  if (caption !== null) {
+  if (caption) {
     state.caption = caption;
     const input = document.querySelector('#caption');
     if (input) input.value = caption;
@@ -59,31 +49,25 @@ export async function handleShot(editorApi) {
     button.classList.toggle('active', button.dataset.grade === state.grade);
   });
 
-  const photoName = params.get('photo');
-  if (photoName) {
-    const img = await loadSamplePhoto(photoName);
-    state.photos = [img];
-    if (editorApi.rebuildTray) editorApi.rebuildTray();
+  const photo = params.get('photo');
+  if (photo) {
+    const img = await loadSamplePhoto(photo);
+    state.photos = [{ img, name: photo }];
+    const crops = [0, -0.18, 0.18];
     state.panels.forEach((panel, i) => {
       panel.photo = 0;
-      const crops = [
-        { zoom: 1, ox: 0, oy: 0 },
-        { zoom: 1.35, ox: -0.12, oy: -0.08 },
-        { zoom: 1.35, ox: 0.12, oy: 0.08 },
-      ];
-      const crop = crops[i % crops.length];
-      panel.zoom = crop.zoom;
-      panel.ox = crop.ox;
-      panel.oy = crop.oy;
+      panel.zoom = 1.12;
+      panel.ox = crops[i % crops.length];
+      panel.oy = 0;
     });
-  } else {
-    await loadSamples();
+    rebuildTray();
   }
+  redraw();
 
   if (shot === 'cover') {
+    const sizeKey = params.get('size') || 'square';
+    const size = EXPORT_SIZES[sizeKey] || EXPORT_SIZES.square;
     document.body.classList.add('shot-cover');
-    const sizeName = params.get('size') || 'square';
-    const size = EXPORT_SIZES[sizeName] || EXPORT_SIZES.square;
     const canvas = document.querySelector('#shot-canvas');
     canvas.width = size.w;
     canvas.height = size.h;
@@ -99,19 +83,17 @@ export async function handleShot(editorApi) {
     canvas.style.width = `${Math.floor(size.w * fit)}px`;
     canvas.style.height = `${Math.floor(size.h * fit)}px`;
     canvas.style.margin = '0 auto';
-    if (document.fonts && document.fonts.load) {
-      try {
-        await document.fonts.load('100px Anton');
-      } catch (error) {
-        // The caption still draws in its fallback face.
-      }
-    }
-    renderCover(canvas.getContext('2d'), size.w, size.h, state, -1);
+    await document.fonts.load('100px Anton');
+    renderCover(canvas, state, size);
     document.title = 'Vice Cover Studio — cover';
     return true;
   }
 
-  redraw();
-  document.title = 'Vice Cover Studio — editor';
-  return true;
+  if (shot === 'editor') {
+    redraw();
+    document.title = 'Vice Cover Studio — editor';
+    return true;
+  }
+
+  return false;
 }
