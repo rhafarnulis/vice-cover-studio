@@ -7,7 +7,14 @@
 // single canvas that re-renders through renderCover on every change, so what
 // the editor shows is exactly what the export writes.
 
-import { CAPTION_COLOURS, EXPORT_SIZES, GRADES, LAYOUTS, freshState, panelsForLayout, renderCover } from './cover.js';
+import {
+  EXPORT_SIZES,
+  GRADES,
+  LAYOUTS,
+  freshState,
+  panelsForLayout,
+  renderCover,
+} from './cover.js';
 
 /** The three bundled sample photos, made with an image model, free to use. */
 export const SAMPLES = [
@@ -41,125 +48,106 @@ function loadPhotoSrc(src) {
   });
 }
 
-/**
- * Build the editor. root is the element holding the whole app; onReady fires
- * once the first render is done. Returns the state and a redraw function.
- */
+/** Build the editor. root is the element holding the whole app; onReady fires
+ *  once, with the editor API, after the first draw. */
 export function buildEditor(root, onReady) {
   const state = freshState();
   let selectedPanel = 0;
   let activePhoto = -1;
   let exportSize = 'square';
-  let previewScale = 1;
-  let dragging = null;
 
   const preview = root.querySelector('#preview');
-  const pctx = preview.getContext('2d');
   const tray = root.querySelector('#tray');
+  const status = root.querySelector('#status');
   const zoom = root.querySelector('#zoom');
   const zoomValue = root.querySelector('#zoom-value');
   const captionInput = root.querySelector('#caption');
-  const subcaptionInput = root.querySelector('#subcaption');
-  const captionSize = root.querySelector('#caption-size');
-  const status = root.querySelector('#status');
+  const sublineInput = root.querySelector('#subline');
 
-  /** Say something in the status line. */
-  function say(text) {
-    if (status) status.textContent = text;
+  function say(message) {
+    if (status) status.textContent = message;
   }
 
-  /** The preview canvas is fixed at 900 px wide; scale the poster into it. */
-  function fitPreview() {
-    const size = EXPORT_SIZES[exportSize];
-    const scale = 900 / size.w;
-    preview.width = Math.round(size.w * scale);
-    preview.height = Math.round(size.h * scale);
-    previewScale = scale;
+  /** Panel rectangles in preview-canvas pixels, for clicks and drags. */
+  function panelRects() {
+    const photoH = preview.height * 0.78;
+    return LAYOUTS[state.layout].panels.map((frac) => ({
+      x: frac.x * preview.width,
+      y: frac.y * photoH,
+      w: frac.w * preview.width,
+      h: frac.h * photoH,
+    }));
   }
 
-  /** Re-render the preview from the current state. */
+  /** Redraw the preview and outline the selected panel. */
   function redraw() {
-    fitPreview();
-    const size = EXPORT_SIZES[exportSize];
-    renderCover(pctx, preview.width, preview.height, state, selectedPanel);
-    void size;
+    renderCover(preview, state, EXPORT_SIZES[exportSize]);
+    const rects = panelRects();
+    const rect = rects[selectedPanel];
+    if (rect) {
+      const ctx = preview.getContext('2d');
+      ctx.save();
+      ctx.strokeStyle = '#ff2e88';
+      ctx.lineWidth = Math.max(3, preview.width * 0.006);
+      ctx.strokeRect(rect.x + 2, rect.y + 2, rect.w - 4, rect.h - 4);
+      ctx.restore();
+    }
+    syncPanelControls();
   }
 
-  /** Rebuild the photo tray thumbnails from state.photos. */
+  /** Rebuild the photo tray thumbnails. */
   function rebuildTray() {
     tray.innerHTML = '';
-    state.photos.forEach((img, i) => {
+    state.photos.forEach((photo, i) => {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'thumb' + (i === activePhoto ? ' active' : '');
-      button.title = img.dataset.name || `Photo ${i + 1}`;
       const thumb = document.createElement('img');
-      thumb.src = img.src;
-      thumb.alt = button.title;
+      thumb.src = photo.img.src;
+      thumb.alt = photo.name;
       const label = document.createElement('span');
-      label.textContent = button.title;
+      label.textContent = photo.name;
       button.append(thumb, label);
       button.addEventListener('click', () => {
         activePhoto = i;
-        assignActivePhotoToSelected();
+        placePhoto(i);
         rebuildTray();
       });
       tray.appendChild(button);
     });
-    if (state.photos.length === 0) {
-      const hint = document.createElement('p');
-      hint.className = 'tray-hint';
-      hint.textContent = 'No photos yet — add your own, or load the samples below.';
-      tray.appendChild(hint);
-    }
   }
 
   /** Put the active photo into the selected panel, with a different crop per panel. */
-  function assignActivePhotoToSelected() {
-    if (activePhoto < 0) return;
+  function placePhoto(photoIndex) {
+    if (photoIndex < 0) return;
+    const crops = [0, -0.18, 0.18];
     const panel = state.panels[selectedPanel];
-    if (!panel) return;
-    panel.photo = activePhoto;
-    // One photo across several panels reads as different shots when each
-    // panel crops a different corner of it.
-    const crops = [
-      { zoom: 1, ox: 0, oy: 0 },
-      { zoom: 1.35, ox: -0.12, oy: -0.08 },
-      { zoom: 1.35, ox: 0.12, oy: 0.08 },
-    ];
-    const crop = crops[selectedPanel % crops.length];
-    panel.zoom = crop.zoom;
-    panel.ox = crop.ox;
-    panel.oy = crop.oy;
-    syncPanelControls();
+    panel.photo = photoIndex;
+    panel.zoom = 1.12;
+    panel.ox = crops[selectedPanel % crops.length];
+    panel.oy = 0;
     redraw();
-    say(`Photo ${activePhoto + 1} is in panel ${selectedPanel + 1}. Drag it to reposition.`);
+    say(`Photo ${photoIndex + 1} is in panel ${selectedPanel + 1}. Drag it to reposition.`);
   }
 
   /** Fill every panel with the active photo, each with its own crop. */
   function fillAllPanels() {
     if (activePhoto < 0) {
-      say('Pick a photo first, then fill all panels with it.');
+      say('Add a photo first, then fill every panel with it.');
       return;
     }
+    const crops = [0, -0.18, 0.18];
     state.panels.forEach((panel, i) => {
       panel.photo = activePhoto;
-      const crops = [
-        { zoom: 1, ox: 0, oy: 0 },
-        { zoom: 1.35, ox: -0.12, oy: -0.08 },
-        { zoom: 1.35, ox: 0.12, oy: 0.08 },
-      ];
-      const crop = crops[i % crops.length];
-      panel.zoom = crop.zoom;
-      panel.ox = crop.ox;
-      panel.oy = crop.oy;
+      panel.zoom = 1.12;
+      panel.ox = crops[i % crops.length];
+      panel.oy = 0;
     });
-    syncPanelControls();
     redraw();
-    say('One photo fills every panel, each cropped differently.');
+    say('One photo in every panel.');
   }
 
-  /** Show the selected panel's zoom in the slider. */
+  /** Keep the zoom slider and its label on the selected panel. */
   function syncPanelControls() {
     const panel = state.panels[selectedPanel];
     if (!panel) return;
@@ -167,45 +155,88 @@ export function buildEditor(root, onReady) {
     zoomValue.textContent = `${Math.round(panel.zoom * 100)}%`;
   }
 
-  /** Which panel, if any, holds the point (x, y) in preview pixels. */
-  function panelAt(x, y) {
-    const layout = LAYOUTS[state.layout];
-    const W = preview.width;
-    const H = preview.height;
-    for (let i = 0; i < layout.panels.length; i++) {
-      const p = layout.panels[i];
-      if (x >= p.x * W && x < (p.x + p.w) * W && y >= p.y * H && y < (p.y + p.h) * H) return i;
+  /** Add the user's files as photos. */
+  async function addFiles(files) {
+    for (const file of files) {
+      try {
+        const img = await readPhotoFile(file);
+        state.photos.push({ img, name: file.name });
+      } catch (error) {
+        say(String(error.message || error));
+      }
     }
-    return -1;
+    if (state.photos.length) {
+      activePhoto = state.photos.length - 1;
+      rebuildTray();
+      say(`${state.photos.length} photo(s) loaded. Click a panel, then a photo, to place it.`);
+    }
+    redraw();
   }
 
-  /** Wire the preview canvas: click selects a panel, drag pans its photo. */
+  /** Load the three bundled sample photos. */
+  async function loadSamples() {
+    for (const sample of SAMPLES) {
+      try {
+        const img = await loadPhotoSrc(sample.src);
+        state.photos.push({ img, name: sample.name });
+      } catch (error) {
+        say(String(error.message || error));
+      }
+    }
+    activePhoto = state.photos.length - 1;
+    rebuildTray();
+    redraw();
+    say('Samples loaded. Click a panel, then a photo, to place it.');
+  }
+
+  /** Render the poster at an export size and download it as a PNG. */
+  function exportCover(sizeKey) {
+    const size = EXPORT_SIZES[sizeKey];
+    if (!size) return;
+    const offscreen = document.createElement('canvas');
+    renderCover(offscreen, state, size);
+    offscreen.toBlob((blob) => {
+      if (!blob) {
+        say('The export failed to render.');
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `vice-cover-${sizeKey}-${size.w}x${size.h}.png`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      say(`Exported ${size.label} — check your downloads.`);
+    }, 'image/png');
+  }
+
+  /** Click a panel to select it; drag a placed photo to reposition it. */
   function wirePreview() {
+    let dragging = null;
     preview.addEventListener('pointerdown', (event) => {
-      const rect = preview.getBoundingClientRect();
-      const x = ((event.clientX - rect.left) / rect.width) * preview.width;
-      const y = ((event.clientY - rect.top) / rect.height) * preview.height;
-      const hit = panelAt(x, y);
+      const box = preview.getBoundingClientRect();
+      const x = ((event.clientX - box.left) / box.width) * preview.width;
+      const y = ((event.clientY - box.top) / box.height) * preview.height;
+      const hit = panelRects().findIndex(
+        (rect) => x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h,
+      );
       if (hit < 0) return;
       selectedPanel = hit;
-      syncPanelControls();
-      redraw();
       const panel = state.panels[hit];
-      dragging = { x, y, ox: panel.ox, oy: panel.oy, moved: false };
-      preview.setPointerCapture(event.pointerId);
+      if (panel.photo >= 0) {
+        dragging = { x, y, ox: panel.ox, oy: panel.oy, rect: panelRects()[hit] };
+        preview.setPointerCapture(event.pointerId);
+      }
+      redraw();
     });
     preview.addEventListener('pointermove', (event) => {
       if (!dragging) return;
-      const rect = preview.getBoundingClientRect();
-      const x = ((event.clientX - rect.left) / rect.width) * preview.width;
-      const y = ((event.clientY - rect.top) / rect.height) * preview.height;
+      const box = preview.getBoundingClientRect();
+      const x = ((event.clientX - box.left) / box.width) * preview.width;
+      const y = ((event.clientY - box.top) / box.height) * preview.height;
       const panel = state.panels[selectedPanel];
-      if (!panel || panel.photo < 0) return;
-      const layout = LAYOUTS[state.layout];
-      const p = layout.panels[selectedPanel];
-      panel.ox = Math.max(-0.4, Math.min(0.4, dragging.ox + (x - dragging.x) / (p.w * preview.width)));
-      panel.oy = Math.max(-0.4, Math.min(0.4, dragging.oy + (y - dragging.y) / (p.h * preview.height)));
-      if (Math.abs(x - dragging.x) + Math.abs(y - dragging.y) > 2) dragging.moved = true;
+      panel.ox = dragging.ox + (x - dragging.x) / dragging.rect.w;
+      panel.oy = dragging.oy + (y - dragging.y) / dragging.rect.h;
       redraw();
     });
     preview.addEventListener('pointerup', () => {
@@ -213,57 +244,22 @@ export function buildEditor(root, onReady) {
     });
   }
 
-  /** Wire the file input that reads the user's own photos. */
   function wirePhotoInput() {
-    const input = root.querySelector('#photo-input');
-    input.addEventListener('change', async () => {
-      const files = [...input.files].filter((f) => f.type.startsWith('image/'));
-      if (files.length === 0) return;
-      say(`Loading ${files.length} photo${files.length === 1 ? '' : 's'}…`);
-      for (const file of files) {
-        try {
-          const img = await readPhotoFile(file);
-          img.dataset.name = file.name.replace(/\.[^.]+$/, '');
-          state.photos.push(img);
-        } catch (error) {
-          say(String(error.message || error));
-        }
-      }
-      activePhoto = state.photos.length - 1;
-      rebuildTray();
-      redraw();
-      say(`${state.photos.length} photo${state.photos.length === 1 ? '' : 's'} loaded. Click a panel, then a photo, to place it.`);
-      input.value = '';
+    root.querySelector('#photo-input').addEventListener('change', (event) => {
+      addFiles(Array.from(event.target.files || []));
+      event.target.value = '';
     });
+    root.querySelector('#load-samples').addEventListener('click', loadSamples);
+    root.querySelector('#fill-all').addEventListener('click', fillAllPanels);
   }
 
-  /** Load the bundled sample photos into the tray. */
-  async function loadSamples() {
-    say('Loading samples…');
-    for (const sample of SAMPLES) {
-      try {
-        const img = await loadPhotoSrc(sample.src);
-        img.dataset.name = sample.name;
-        state.photos.push(img);
-      } catch (error) {
-        say(String(error.message || error));
-      }
-    }
-    activePhoto = 0;
-    rebuildTray();
-    redraw();
-    say('Samples loaded. Click a panel, then a photo, to place it.');
-  }
-
-  /** Wire the layout, grade, caption and export controls. */
   function wireControls() {
     root.querySelectorAll('[data-layout]').forEach((button) => {
       button.addEventListener('click', () => {
         state.layout = button.dataset.layout;
         state.panels = panelsForLayout(state.layout, state.panels);
-        if (selectedPanel >= state.panels.length) selectedPanel = 0;
+        selectedPanel = 0;
         root.querySelectorAll('[data-layout]').forEach((b) => b.classList.toggle('active', b === button));
-        syncPanelControls();
         redraw();
       });
     });
@@ -274,34 +270,6 @@ export function buildEditor(root, onReady) {
         redraw();
       });
     });
-    root.querySelectorAll('[data-colour]').forEach((button) => {
-      button.addEventListener('click', () => {
-        state.captionColour = button.dataset.colour;
-        root.querySelectorAll('[data-colour]').forEach((b) => b.classList.toggle('active', b === button));
-        redraw();
-      });
-    });
-    captionInput.addEventListener('input', () => {
-      state.caption = captionInput.value;
-      redraw();
-    });
-    subcaptionInput.addEventListener('input', () => {
-      state.subcaption = subcaptionInput.value;
-      redraw();
-    });
-    captionSize.addEventListener('input', () => {
-      state.captionSize = Number(captionSize.value);
-      redraw();
-    });
-    zoom.addEventListener('input', () => {
-      const panel = state.panels[selectedPanel];
-      if (!panel) return;
-      panel.zoom = Number(zoom.value);
-      zoomValue.textContent = `${Math.round(panel.zoom * 100)}%`;
-      redraw();
-    });
-    root.querySelector('#fill-all').addEventListener('click', fillAllPanels);
-    root.querySelector('#load-samples').addEventListener('click', loadSamples);
     root.querySelectorAll('[data-size]').forEach((button) => {
       button.addEventListener('click', () => {
         exportSize = button.dataset.size;
@@ -309,70 +277,50 @@ export function buildEditor(root, onReady) {
         redraw();
       });
     });
-    root.querySelector('#export').addEventListener('click', exportCover);
+    captionInput.addEventListener('input', () => {
+      state.caption = captionInput.value;
+      redraw();
+    });
+    sublineInput.addEventListener('input', () => {
+      state.subline = sublineInput.value;
+      redraw();
+    });
+    zoom.addEventListener('input', () => {
+      const panel = state.panels[selectedPanel];
+      panel.zoom = Number(zoom.value);
+      syncPanelControls();
+      redraw();
+    });
+    root.querySelector('#export').addEventListener('click', () => exportCover(exportSize));
   }
 
-  /** Render the poster at the chosen export size and download it as a PNG. */
-  function exportCover() {
-    const size = EXPORT_SIZES[exportSize];
-    const canvas = document.createElement('canvas');
-    canvas.width = size.w;
-    canvas.height = size.h;
-    renderCover(canvas.getContext('2d'), size.w, size.h, state, -1);
-    canvas.toBlob((blob) => {
-      if (!blob) {
-        say('Export failed — try again.');
-        return;
-      }
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `vice-cover-${size.w}x${size.h}.png`;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      say(`Exported ${size.w} × ${size.h} PNG.`);
-    }, 'image/png');
-  }
-
-  /** Fill the layout/grade/colour/size buttons from the cover module's tables. */
   function buildOptionButtons() {
-    const layoutRow = root.querySelector('#layout-row');
-    Object.entries(LAYOUTS).forEach(([name, layout], i) => {
+    const layouts = root.querySelector('#layout-options');
+    Object.entries(LAYOUTS).forEach(([key, layout], i) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.dataset.layout = name;
-      button.className = i === 0 ? 'chip active' : 'chip';
+      button.dataset.layout = key;
       button.textContent = layout.label;
-      layoutRow.appendChild(button);
+      if (i === 0) button.classList.add('active');
+      layouts.appendChild(button);
     });
-    const gradeRow = root.querySelector('#grade-row');
-    Object.entries(GRADES).forEach(([name, grade], i) => {
+    const grades = root.querySelector('#grade-options');
+    Object.entries(GRADES).forEach(([key, grade], i) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.dataset.grade = name;
-      button.className = i === 0 ? 'chip active' : 'chip';
+      button.dataset.grade = key;
       button.textContent = grade.label;
-      gradeRow.appendChild(button);
+      if (i === 0) button.classList.add('active');
+      grades.appendChild(button);
     });
-    const colourRow = root.querySelector('#colour-row');
-    Object.entries(CAPTION_COLOURS).forEach(([name, colour], i) => {
+    const sizes = root.querySelector('#size-options');
+    Object.entries(EXPORT_SIZES).forEach(([key, size], i) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.dataset.colour = name;
-      button.className = 'swatch' + (i === 0 ? ' active' : '');
-      button.style.background = colour;
-      button.title = name;
-      button.setAttribute('aria-label', `Caption colour ${name}`);
-      colourRow.appendChild(button);
-    });
-    const sizeRow = root.querySelector('#size-row');
-    Object.entries(EXPORT_SIZES).forEach(([name, size], i) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.dataset.size = name;
-      button.className = i === 0 ? 'chip active' : 'chip';
+      button.dataset.size = key;
       button.textContent = size.label;
-      sizeRow.appendChild(button);
+      if (i === 0) button.classList.add('active');
+      sizes.appendChild(button);
     });
   }
 
